@@ -7,14 +7,16 @@ import random
 from datetime import datetime
 from supabase import create_client, Client
 
+
 # ==========================================
 # 페이지 설정
 # ==========================================
 st.set_page_config(
-    page_title="Yes24 도서 크롤러",
+    page_title="Y24 도서 크롤러",
     page_icon="📚",
     layout="wide"
 )
+
 
 # ==========================================
 # CSS 스타일
@@ -29,6 +31,18 @@ st.markdown("""
         margin-bottom: 20px;
         border: 1px solid #ddd;
     }
+
+    /* 신규 도서 카드 스타일 */
+    .book-card-new {
+        background: white;
+        padding: 15px;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(255,77,77,0.3);
+        margin-bottom: 20px;
+        border: 3px solid #ff4d4d;
+        background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+    }
+
     .new-badge {
         background: #ff4d4d;
         color: white;
@@ -47,6 +61,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # ==========================================
 # Supabase 연결
 # ==========================================
@@ -56,6 +71,7 @@ def init_supabase():
     url = st.secrets["supabase"]["url"]
     key = st.secrets["supabase"]["key"]
     return create_client(url, key)
+
 
 def check_and_save_book(supabase: Client, goods_no):
     """신규 도서 확인 및 저장"""
@@ -72,6 +88,7 @@ def check_and_save_book(supabase: Client, goods_no):
     except Exception as e:
         st.error(f"DB 에러: {e}")
         return False
+
 
 # ==========================================
 # 크롤링 함수
@@ -150,12 +167,14 @@ def crawl_yes24(urls, supabase, progress_bar=None):
 
     return crawled_data
 
+
 def get_sale_color_class(sale_num):
     if sale_num <= 10000: return "sale-10k"
     elif sale_num <= 30000: return "sale-30k"
     elif sale_num <= 50000: return "sale-50k"
     elif sale_num <= 100000: return "sale-100k"
     else: return "sale-high"
+
 
 # ==========================================
 # 메인 앱
@@ -193,105 +212,214 @@ def main():
 
     # 사이드바 설정
     st.sidebar.header("⚙️ 설정")
-    selected_category = st.sidebar.selectbox("카테고리 선택", list(categories.keys()))
+
+    # 3개 카테고리 체크박스로 선택
+    st.sidebar.subheader("카테고리 선택 (중복 선택 가능)")
+    select_elementary = st.sidebar.checkbox("초등", value=True)
+    select_middle = st.sidebar.checkbox("중등", value=True)
+    select_high = st.sidebar.checkbox("고등", value=True)
+
+    # 한 줄당 책 개수 조절
+    cols_per_row = st.sidebar.slider("한 줄당 표시 개수", min_value=2, max_value=8, value=6, step=1)
+
+    # 선택된 카테고리 목록
+    selected_categories = []
+    if select_elementary:
+        selected_categories.append("초등")
+    if select_middle:
+        selected_categories.append("중등")
+    if select_high:
+        selected_categories.append("고등")
 
     # 크롤링 버튼
-    if st.sidebar.button("🔄 크롤링 시작", type="primary", use_container_width=True):
-        progress_bar = st.progress(0, "크롤링 준비 중...")
+    if st.sidebar.button("🔄 크롤링 시작", type="primary", use_container_width=True, disabled=len(selected_categories)==0):
+        if len(selected_categories) == 0:
+            st.warning("⚠️ 최소 1개 카테고리를 선택하세요!")
+        else:
+            progress_bar = st.progress(0, "크롤링 준비 중...")
+            all_books = {}
 
-        with st.spinner("데이터 수집 중..."):
-            books = crawl_yes24(categories[selected_category], supabase, progress_bar)
-            st.session_state['books'] = books
-            st.session_state['category'] = selected_category
+            with st.spinner("데이터 수집 중..."):
+                for cat in selected_categories:
+                    st.info(f"📚 {cat} 카테고리 크롤링 중...")
+                    books = crawl_yes24(categories[cat], supabase, progress_bar)
+                    all_books[cat] = books
 
-        progress_bar.empty()
-        st.success(f"✅ {len(books)}권의 책을 수집했습니다!")
+            st.session_state['all_books'] = all_books
+            st.session_state['cols_per_row'] = cols_per_row
+            progress_bar.empty()
+
+            total_count = sum(len(books) for books in all_books.values())
+            st.success(f"✅ 총 {total_count}권의 책을 수집했습니다!")
+
+    # 선택된 열 개수 업데이트
+    if 'all_books' in st.session_state:
+        st.session_state['cols_per_row'] = cols_per_row
 
     # 데이터가 있을 때만 표시
-    if 'books' in st.session_state and st.session_state['books']:
-        books = st.session_state['books']
-        category = st.session_state.get('category', '도서')
+    if 'all_books' in st.session_state and st.session_state['all_books']:
+        all_books = st.session_state['all_books']
+        cols_per_row = st.session_state.get('cols_per_row', 4)
 
         st.divider()
-        st.subheader(f"📖 {category} 도서 목록 ({len(books)}권)")
 
-        # 필터 및 정렬 옵션
-        col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+        # 각 카테고리별로 표시
+        for category, books in all_books.items():
+            st.subheader(f"📖 {category} 도서 목록 ({len(books)}권)")
 
-        with col1:
-            sort_option = st.selectbox("정렬 기준", ["판매지수 높은순", "판매지수 낮은순", "최신순", "오래된순"])
+            # 세션 상태 초기화
+            if f'sort_by_{category}' not in st.session_state:
+                st.session_state[f'sort_by_{category}'] = 'sale'  # 'sale' 또는 'date'
+                st.session_state[f'sort_order_{category}'] = 'desc'  # 'desc' 또는 'asc'
+                st.session_state[f'filter_new_{category}'] = False
+                st.session_state[f'group_by_pub_{category}'] = False
 
-        with col2:
-            filter_new = st.checkbox("🆕 신규 도서만 보기")
+            # 필터 및 정렬 옵션 (버튼 방식)
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
 
-        with col3:
-            selected_publisher = st.selectbox("출판사 필터", ["전체"] + sorted(list(set([b['publisher'] for b in books]))))
+            with col1:
+                # 판매지수 정렬 버튼
+                current_sort = st.session_state[f'sort_by_{category}']
+                current_order = st.session_state[f'sort_order_{category}']
 
-        with col4:
-            group_by_publisher = st.checkbox("출판사별 그룹")
+                if current_sort == 'sale':
+                    label = f"📊 판매지수 {'▼' if current_order == 'desc' else '▲'}"
+                    button_type = "primary"
+                else:
+                    label = "📊 판매지수"
+                    button_type = "secondary"
 
-        # 필터링
-        filtered_books = books
-        if filter_new:
-            filtered_books = [b for b in filtered_books if b['is_new']]
-        if selected_publisher != "전체":
-            filtered_books = [b for b in filtered_books if b['publisher'] == selected_publisher]
+                if st.button(label, key=f"btn_sale_{category}", use_container_width=True, type=button_type):
+                    if current_sort == 'sale':
+                        # 같은 기준이면 오름/내림 토글
+                        st.session_state[f'sort_order_{category}'] = 'asc' if current_order == 'desc' else 'desc'
+                    else:
+                        # 다른 기준이면 판매지수로 변경 (내림차순)
+                        st.session_state[f'sort_by_{category}'] = 'sale'
+                        st.session_state[f'sort_order_{category}'] = 'desc'
+                    st.rerun()
 
-        # 정렬
-        if "판매지수 높은순" in sort_option:
-            filtered_books = sorted(filtered_books, key=lambda x: x['sale_int'], reverse=True)
-        elif "판매지수 낮은순" in sort_option:
-            filtered_books = sorted(filtered_books, key=lambda x: x['sale_int'])
-        elif "최신순" in sort_option:
-            filtered_books = sorted(filtered_books, key=lambda x: x['date_int'], reverse=True)
-        else:
-            filtered_books = sorted(filtered_books, key=lambda x: x['date_int'])
+            with col2:
+                # 발행일 정렬 버튼
+                if current_sort == 'date':
+                    label = f"📅 발행일 {'▼' if current_order == 'desc' else '▲'}"
+                    button_type = "primary"
+                else:
+                    label = "📅 발행일"
+                    button_type = "secondary"
 
-        st.info(f"📊 필터링 결과: **{len(filtered_books)}권**")
+                if st.button(label, key=f"btn_date_{category}", use_container_width=True, type=button_type):
+                    if current_sort == 'date':
+                        # 같은 기준이면 오름/내림 토글
+                        st.session_state[f'sort_order_{category}'] = 'asc' if current_order == 'desc' else 'desc'
+                    else:
+                        # 다른 기준이면 발행일로 변경 (최신순)
+                        st.session_state[f'sort_by_{category}'] = 'date'
+                        st.session_state[f'sort_order_{category}'] = 'desc'
+                    st.rerun()
 
-        # 출판사별 그룹핑
-        if group_by_publisher:
-            publishers = {}
-            for book in filtered_books:
-                pub = book['publisher']
-                if pub not in publishers:
-                    publishers[pub] = []
-                publishers[pub].append(book)
+            with col3:
+                # 신규 도서 필터 버튼
+                filter_new = st.session_state[f'filter_new_{category}']
+                new_label = "🆕 신규만 ON" if filter_new else "🆕 신규만"
+                new_type = "primary" if filter_new else "secondary"
 
-            for pub_name in sorted(publishers.keys()):
-                with st.expander(f"📚 {pub_name} ({len(publishers[pub_name])}권)", expanded=True):
-                    display_books(publishers[pub_name])
-        else:
-            display_books(filtered_books)
+                if st.button(new_label, key=f"btn_new_{category}", use_container_width=True, type=new_type):
+                    st.session_state[f'filter_new_{category}'] = not filter_new
+                    st.rerun()
+
+            with col4:
+                # 출판사별 그룹 버튼
+                group_by_pub = st.session_state[f'group_by_pub_{category}']
+                group_label = "🏢 출판사별 ON" if group_by_pub else "🏢 출판사별"
+                group_type = "primary" if group_by_pub else "secondary"
+
+                if st.button(group_label, key=f"btn_group_{category}", use_container_width=True, type=group_type):
+                    st.session_state[f'group_by_pub_{category}'] = not group_by_pub
+                    st.rerun()
+
+            with col5:
+                # 출판사 선택 (드롭다운 유지)
+                selected_publisher = st.selectbox("출판사", 
+                    ["전체"] + sorted(list(set([b['publisher'] for b in books]))),
+                    key=f"pub_{category}")
+
+            # 필터링
+            filtered_books = books
+            if st.session_state[f'filter_new_{category}']:
+                filtered_books = [b for b in filtered_books if b['is_new']]
+            if selected_publisher != "전체":
+                filtered_books = [b for b in filtered_books if b['publisher'] == selected_publisher]
+
+            # 정렬
+            sort_by = st.session_state[f'sort_by_{category}']
+            sort_order = st.session_state[f'sort_order_{category}']
+
+            if sort_by == 'sale':
+                filtered_books = sorted(filtered_books, key=lambda x: x['sale_int'], reverse=(sort_order == 'desc'))
+            else:  # date
+                filtered_books = sorted(filtered_books, key=lambda x: x['date_int'], reverse=(sort_order == 'desc'))
+
+            st.info(f"📊 필터링 결과: **{len(filtered_books)}권**")
+
+            # 출판사별 그룹핑
+            if st.session_state[f'group_by_pub_{category}']:
+                publishers = {}
+                for book in filtered_books:
+                    pub = book['publisher']
+                    if pub not in publishers:
+                        publishers[pub] = []
+                    publishers[pub].append(book)
+
+                for pub_name in sorted(publishers.keys()):
+                    with st.expander(f"📚 {pub_name} ({len(publishers[pub_name])}권)", expanded=True):
+                        display_books(publishers[pub_name], cols_per_row)
+            else:
+                display_books(filtered_books, cols_per_row)
+
+            st.divider()
     else:
         st.info("👈 왼쪽 사이드바에서 카테고리를 선택하고 크롤링을 시작하세요!")
+
 
 # ==========================================
 # 도서 표시 함수
 # ==========================================
-def display_books(books):
-    cols_per_row = 4
+def display_books(books, cols_per_row=4):
     for i in range(0, len(books), cols_per_row):
         cols = st.columns(cols_per_row)
         for j, book in enumerate(books[i:i+cols_per_row]):
             with cols[j]:
-                # 신규 뱃지
-                new_badge = '<span class="new-badge">NEW</span>' if book['is_new'] else ''
+                # 신규 도서 여부에 따라 다른 스타일
+                card_class = "book-card-new" if book['is_new'] else "book-card"
 
-                # 이미지
-                st.image(book['img'], use_container_width=True)
+                # 컨테이너로 카드 스타일 적용
+                with st.container():
+                    # 신규 뱃지
+                    new_badge = '<span class="new-badge">NEW</span>' if book['is_new'] else ''
 
-                # 제목 (링크 포함)
-                st.markdown(f"**[{book['title']}]({book['link']})**{new_badge}", unsafe_allow_html=True)
+                    # 이미지 테두리 스타일
+                    if book['is_new']:
+                        st.markdown(f"""
+                        <div style="border: 3px solid #ff4d4d; border-radius: 8px; padding: 5px; background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);">
+                            <img src="{book['img']}" style="width: 100%; border-radius: 5px;">
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.image(book['img'], use_container_width=True)
 
-                # 출판사 및 날짜
-                st.caption(f"{book['publisher']} | {book['date_text']}")
+                    # 제목 (링크 포함)
+                    st.markdown(f"**[{book['title']}]({book['link']})**{new_badge}", unsafe_allow_html=True)
 
-                # 판매지수 (색상 적용)
-                color_class = get_sale_color_class(book['sale_int'])
-                st.markdown(f"<div class='{color_class}' style='font-weight:900;'>{book['sale_text']}</div>", unsafe_allow_html=True)
+                    # 출판사 및 날짜
+                    st.caption(f"{book['publisher']} | {book['date_text']}")
 
-                st.divider()
+                    # 판매지수 (색상 적용)
+                    color_class = get_sale_color_class(book['sale_int'])
+                    st.markdown(f"<div class='{color_class}' style='font-weight:900;'>{book['sale_text']}</div>", unsafe_allow_html=True)
+
+                    st.divider()
+
 
 if __name__ == "__main__":
     main()
